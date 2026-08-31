@@ -155,16 +155,13 @@ export default function App() {
       const prompt = mode === "standard"
         ? buildStandardPrompt({ grade, paper, difficulty, selectedTopics, schoolName, teacherName, year, extraInstructions })
         : buildCustomPrompt({ customTitle, customSchool, customTeacher, customLevel, customGrade, customDuration, customYear, customDate, addAnswerKey, addFormula, sections, customExtraInstructions });
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-ipc": "true"
-        },
-        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4000, messages: [{ role: "user", content: prompt }] })
-      });
+  const res = await fetch("/api/generate", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4000, messages: [{ role: "user", content: prompt }] })
+});
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || "API error");
       const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
