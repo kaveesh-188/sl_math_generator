@@ -348,9 +348,19 @@ export function GraphModal({ onClose }) {
   );
 }
 
-export function ScanCropTool({ onInsert, targetSection }) {
+/* ============================================================
+   ScanCropTool — FIXED
+   - Added explicit Scroll / Crop mode toggle so the page/image
+     can be scrolled normally on mobile without triggering a crop.
+   - Cropping (pointer-down/move/up handlers) now only runs while
+     "Crop Mode" is active.
+   - Calls onClose() after "Insert into Paper" so the modal closes
+     automatically instead of staying open.
+   ============================================================ */
+export function ScanCropTool({ onInsert, targetSection, onClose }) {
   const [imgSrc, setImgSrc] = useState(null);
   const [crops, setCrops] = useState([]);
+  const [cropMode, setCropMode] = useState(false); // false = scroll/pan, true = draw crop box
   const [dragStart, setDragStart] = useState(null);
   const [dragRect, setDragRect] = useState(null);
   const imgRef = useRef(null);
@@ -361,7 +371,7 @@ export function ScanCropTool({ onInsert, targetSection }) {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = ev => { setImgSrc(ev.target.result); setCrops([]); };
+    reader.onload = ev => { setImgSrc(ev.target.result); setCrops([]); setCropMode(false); };
     reader.readAsDataURL(file);
   }
 
@@ -376,18 +386,20 @@ export function ScanCropTool({ onInsert, targetSection }) {
   }
 
   function handlePointerDown(e) {
+    if (!cropMode) return; // let native scrolling happen
     e.preventDefault();
     const pos = getPointerPos(e);
     setDragStart(pos);
     setDragRect({ x: pos.x, y: pos.y, w: 0, h: 0 });
   }
   function handlePointerMove(e) {
-    if (!dragStart) return;
+    if (!cropMode || !dragStart) return;
     e.preventDefault();
     const pos = getPointerPos(e);
     setDragRect({ x: Math.min(dragStart.x, pos.x), y: Math.min(dragStart.y, pos.y), w: Math.abs(pos.x - dragStart.x), h: Math.abs(pos.y - dragStart.y) });
   }
   function handlePointerUp() {
+    if (!cropMode) return;
     if (dragRect && dragRect.w > 14 && dragRect.h > 14) {
       const img = imgRef.current;
       if (img) {
@@ -403,10 +415,15 @@ export function ScanCropTool({ onInsert, targetSection }) {
     setDragStart(null); setDragRect(null);
   }
 
+  function handleInsertCrop(c) {
+    onInsert({ type: c.type, marks: c.marks, topic: "", difficulty: c.difficulty, text: "[Cropped image question]", isOwn: true, ownText: "[CROPPED_IMAGE_QUESTION]", imageDataUrl: c.dataUrl }, targetSection);
+    if (onClose) onClose();
+  }
+
   return (
     <>
       <div style={{ background: "#FFFBEB", border: "1px solid " + GOLD + "44", borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12, color: "#92400E", fontFamily: SANS, lineHeight: 1.6 }}>
-        📷 Upload a photo or scan of an existing paper. Drag a rectangle over each question you want to keep.
+        📷 Upload a photo or scan of an existing paper, then switch to Crop Mode to select each question.
       </div>
       {!imgSrc ? (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "32px 20px", border: "2px dashed " + BORDER, borderRadius: 8, color: "#888", fontFamily: SANS, fontSize: 13 }}>
@@ -417,14 +434,39 @@ export function ScanCropTool({ onInsert, targetSection }) {
         </div>
       ) : (
         <>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <span style={{ fontFamily: SANS, fontSize: 11, color: "#888" }}>Drag a box around a question to crop it.</span>
-            <button onClick={() => { setImgSrc(null); setCrops([]); }} style={{ background: "none", border: "1px solid " + BORDER, borderRadius: 6, padding: "4px 10px", fontFamily: SANS, fontSize: 11, color: "#666", cursor: "pointer" }}>Change image</button>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <button
+              onClick={() => setCropMode(false)}
+              style={{ flex: 1, padding: "9px 10px", borderRadius: 7, border: "2px solid " + (!cropMode ? NAV : BORDER), background: !cropMode ? NAV + "12" : "#fff", color: !cropMode ? NAV : "#666", fontFamily: SANS, fontSize: 12, fontWeight: !cropMode ? 700 : 500, cursor: "pointer" }}
+            >✋ Scroll Image</button>
+            <button
+              onClick={() => setCropMode(true)}
+              style={{ flex: 1, padding: "9px 10px", borderRadius: 7, border: "2px solid " + (cropMode ? PINK : BORDER), background: cropMode ? PINK + "12" : "#fff", color: cropMode ? PINK : "#666", fontFamily: SANS, fontSize: 12, fontWeight: cropMode ? 700 : 500, cursor: "pointer" }}
+            >✂️ Crop Mode</button>
           </div>
-          <div ref={containerRef} style={{ position: "relative", display: "inline-block", maxWidth: "100%", border: "1px solid " + BORDER, borderRadius: 6, overflow: "hidden", cursor: "crosshair", touchAction: "none" }}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontFamily: SANS, fontSize: 11, color: "#888" }}>
+              {cropMode ? "Drag a box around a question to crop it." : "Scroll normally to view the page. Tap “Crop Mode” when ready to select a question."}
+            </span>
+            <button onClick={() => { setImgSrc(null); setCrops([]); setCropMode(false); }} style={{ background: "none", border: "1px solid " + BORDER, borderRadius: 6, padding: "4px 10px", fontFamily: SANS, fontSize: 11, color: "#666", cursor: "pointer", flexShrink: 0, marginLeft: 8 }}>Change image</button>
+          </div>
+          <div
+            ref={containerRef}
+            style={{
+              position: "relative",
+              display: "inline-block",
+              maxWidth: "100%",
+              border: "1px solid " + BORDER,
+              borderRadius: 6,
+              overflow: cropMode ? "hidden" : "auto",
+              maxHeight: cropMode ? "none" : "70vh",
+              cursor: cropMode ? "crosshair" : "default",
+              touchAction: cropMode ? "none" : "pan-y"
+            }}
             onMouseDown={handlePointerDown} onMouseMove={handlePointerMove} onMouseUp={handlePointerUp}
             onMouseLeave={() => { if (dragStart) handlePointerUp(); }}
-            onTouchStart={handlePointerDown} onTouchMove={handlePointerMove} onTouchEnd={handlePointerUp}>
+            onTouchStart={handlePointerDown} onTouchMove={handlePointerMove} onTouchEnd={handlePointerUp}
+          >
             <img ref={imgRef} src={imgSrc} alt="Uploaded paper" style={{ display: "block", maxWidth: "100%", userSelect: "none", pointerEvents: "none" }} draggable={false} />
             {crops.map(c => <div key={c.id} style={{ position: "absolute", left: c.x, top: c.y, width: c.w, height: c.h, border: "2px solid " + SAGE, background: SAGE + "18", pointerEvents: "none" }} />)}
             {dragRect && <div style={{ position: "absolute", left: dragRect.x, top: dragRect.y, width: dragRect.w, height: dragRect.h, border: "2px dashed " + PINK, background: PINK + "18", pointerEvents: "none" }} />}
@@ -441,7 +483,7 @@ export function ScanCropTool({ onInsert, targetSection }) {
                       <div><label style={{ fontFamily: SANS, fontSize: 11, color: "#666", display: "block", marginBottom: 4 }}>Type</label><select value={c.type} onChange={e => setCrops(prev => prev.map(x => x.id === c.id ? { ...x, type: e.target.value } : x))} style={{ padding: "8px 11px", border: "1px solid " + BORDER, borderRadius: 6, fontFamily: SANS, fontSize: 13, background: "#fff" }}>{Q_TYPES.map(qt => <option key={qt.id} value={qt.id}>{qt.icon} {qt.label}</option>)}</select></div>
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
-                      <button onClick={() => onInsert({ type: c.type, marks: c.marks, topic: "", difficulty: c.difficulty, text: "[Cropped image question]", isOwn: true, ownText: "[CROPPED_IMAGE_QUESTION]", imageDataUrl: c.dataUrl }, targetSection)} style={{ padding: "6px 14px", background: SAGE, color: "#fff", border: "none", borderRadius: 6, fontFamily: SANS, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>+ Insert into Paper</button>
+                      <button onClick={() => handleInsertCrop(c)} style={{ padding: "6px 14px", background: SAGE, color: "#fff", border: "none", borderRadius: 6, fontFamily: SANS, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>+ Insert into Paper</button>
                       <button onClick={() => setCrops(prev => prev.filter(x => x.id !== c.id))} style={{ padding: "6px 12px", background: "#fff", border: "1px solid " + RED, color: RED, borderRadius: 6, fontFamily: SANS, fontSize: 12, cursor: "pointer" }}>Discard</button>
                     </div>
                   </div>
@@ -570,7 +612,7 @@ export function QuestionBankModal({ onInsert, onClose, targetSection }) {
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <label style={{ fontFamily: SANS, fontSize: 11, color: "#666" }}>Marks:</label>
                         <input type="number" value={uploadMarks[i] || 2} onChange={e => setUploadMarks(m => ({ ...m, [i]: +e.target.value }))} style={{ ...iSty, width: 55 }} min={1} />
-                        <button onClick={() => onInsert({ type: "short", marks: uploadMarks[i] || 2, topic: "", difficulty: "Standard", text: q, isOwn: true, ownText: q }, targetSection)} style={{ padding: "5px 12px", background: SAGE, color: "#fff", border: "none", borderRadius: 6, fontFamily: SANS, fontSize: 11, cursor: "pointer" }}>+ Insert</button>
+                        <button onClick={() => { onInsert({ type: "short", marks: uploadMarks[i] || 2, topic: "", difficulty: "Standard", text: q, isOwn: true, ownText: q }, targetSection); onClose(); }} style={{ padding: "5px 12px", background: SAGE, color: "#fff", border: "none", borderRadius: 6, fontFamily: SANS, fontSize: 11, cursor: "pointer" }}>+ Insert</button>
                       </div>
                     </div>
                   ))}
@@ -579,7 +621,7 @@ export function QuestionBankModal({ onInsert, onClose, targetSection }) {
             </>
           )}
           {tab === 3 && (
-            <ScanCropTool onInsert={onInsert} targetSection={targetSection} />
+            <ScanCropTool onInsert={onInsert} targetSection={targetSection} onClose={onClose} />
           )}
         </div>
       </div>
