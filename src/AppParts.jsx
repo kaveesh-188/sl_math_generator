@@ -363,6 +363,8 @@ export function ScanCropTool({ onInsert, targetSection, onClose }) {
   const [cropMode, setCropMode] = useState(false); // false = scroll/pan, true = draw crop box
   const [dragStart, setDragStart] = useState(null);
   const [dragRect, setDragRect] = useState(null);
+  const [editingCrop, setEditingCrop] = useState(null); // { id, x, y, w, h } — box currently being adjusted
+  const [editDrag, setEditDrag] = useState(null); // { mode: 'move'|'resize', startPos, orig }
   const imgRef = useRef(null);
   const containerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -371,7 +373,7 @@ export function ScanCropTool({ onInsert, targetSection, onClose }) {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = ev => { setImgSrc(ev.target.result); setCrops([]); setCropMode(false); };
+    reader.onload = ev => { setImgSrc(ev.target.result); setCrops([]); setCropMode(false); setEditingCrop(null); };
     reader.readAsDataURL(file);
   }
 
@@ -386,20 +388,20 @@ export function ScanCropTool({ onInsert, targetSection, onClose }) {
   }
 
   function handlePointerDown(e) {
-    if (!cropMode) return; // let native scrolling happen
+    if (!cropMode || editingCrop) return; // let native scrolling happen, or editing overlay handle it
     e.preventDefault();
     const pos = getPointerPos(e);
     setDragStart(pos);
     setDragRect({ x: pos.x, y: pos.y, w: 0, h: 0 });
   }
   function handlePointerMove(e) {
-    if (!cropMode || !dragStart) return;
+    if (!cropMode || editingCrop || !dragStart) return;
     e.preventDefault();
     const pos = getPointerPos(e);
     setDragRect({ x: Math.min(dragStart.x, pos.x), y: Math.min(dragStart.y, pos.y), w: Math.abs(pos.x - dragStart.x), h: Math.abs(pos.y - dragStart.y) });
   }
   function handlePointerUp() {
-    if (!cropMode) return;
+    if (!cropMode || editingCrop) return;
     if (dragRect && dragRect.w > 14 && dragRect.h > 14) {
       const img = imgRef.current;
       if (img) {
@@ -420,6 +422,55 @@ export function ScanCropTool({ onInsert, targetSection, onClose }) {
     if (onClose) onClose();
   }
 
+  // ---- Edit existing crop: reposition / resize the rectangle, then re-capture ----
+  function startEditCrop(c) {
+    setCropMode(true);
+    setEditingCrop({ id: c.id, x: c.x, y: c.y, w: c.w, h: c.h });
+  }
+  function cancelEditCrop() {
+    setEditingCrop(null);
+    setEditDrag(null);
+  }
+  function startBoxDrag(e, mode) {
+    e.preventDefault(); e.stopPropagation();
+    const pos = getPointerPos(e);
+    setEditDrag({ mode, startPos: pos, orig: { ...editingCrop } });
+  }
+  function handleEditMove(e) {
+    if (!editDrag || !editingCrop) return;
+    e.preventDefault();
+    const pos = getPointerPos(e);
+    const dx = pos.x - editDrag.startPos.x;
+    const dy = pos.y - editDrag.startPos.y;
+    const bounds = containerRef.current.getBoundingClientRect();
+    if (editDrag.mode === "move") {
+      const newX = Math.max(0, Math.min(bounds.width - editDrag.orig.w, editDrag.orig.x + dx));
+      const newY = Math.max(0, Math.min(bounds.height - editDrag.orig.h, editDrag.orig.y + dy));
+      setEditingCrop(prev => ({ ...prev, x: newX, y: newY }));
+    } else {
+      const newW = Math.max(20, Math.min(bounds.width - editDrag.orig.x, editDrag.orig.w + dx));
+      const newH = Math.max(20, Math.min(bounds.height - editDrag.orig.y, editDrag.orig.h + dy));
+      setEditingCrop(prev => ({ ...prev, w: newW, h: newH }));
+    }
+  }
+  function handleEditUp() {
+    setEditDrag(null);
+  }
+  function saveEditCrop() {
+    const img = imgRef.current;
+    if (img && editingCrop) {
+      const scaleX = img.naturalWidth / img.clientWidth;
+      const scaleY = img.naturalHeight / img.clientHeight;
+      const canvas = document.createElement("canvas");
+      canvas.width = editingCrop.w * scaleX; canvas.height = editingCrop.h * scaleY;
+      canvas.getContext("2d").drawImage(img, editingCrop.x * scaleX, editingCrop.y * scaleY, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/png");
+      setCrops(prev => prev.map(x => x.id === editingCrop.id ? { ...x, x: editingCrop.x, y: editingCrop.y, w: editingCrop.w, h: editingCrop.h, dataUrl } : x));
+    }
+    setEditingCrop(null);
+    setEditDrag(null);
+  }
+
   return (
     <>
       <div style={{ background: "#FFFBEB", border: "1px solid " + GOLD + "44", borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12, color: "#92400E", fontFamily: SANS, lineHeight: 1.6 }}>
@@ -434,21 +485,23 @@ export function ScanCropTool({ onInsert, targetSection, onClose }) {
         </div>
       ) : (
         <>
-          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-            <button
-              onClick={() => setCropMode(false)}
-              style={{ flex: 1, padding: "9px 10px", borderRadius: 7, border: "2px solid " + (!cropMode ? NAV : BORDER), background: !cropMode ? NAV + "12" : "#fff", color: !cropMode ? NAV : "#666", fontFamily: SANS, fontSize: 12, fontWeight: !cropMode ? 700 : 500, cursor: "pointer" }}
-            >✋ Scroll Image</button>
-            <button
-              onClick={() => setCropMode(true)}
-              style={{ flex: 1, padding: "9px 10px", borderRadius: 7, border: "2px solid " + (cropMode ? PINK : BORDER), background: cropMode ? PINK + "12" : "#fff", color: cropMode ? PINK : "#666", fontFamily: SANS, fontSize: 12, fontWeight: cropMode ? 700 : 500, cursor: "pointer" }}
-            >✂️ Crop Mode</button>
-          </div>
+          {!editingCrop && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <button
+                onClick={() => setCropMode(false)}
+                style={{ flex: 1, padding: "9px 10px", borderRadius: 7, border: "2px solid " + (!cropMode ? NAV : BORDER), background: !cropMode ? NAV + "12" : "#fff", color: !cropMode ? NAV : "#666", fontFamily: SANS, fontSize: 12, fontWeight: !cropMode ? 700 : 500, cursor: "pointer" }}
+              >✋ Scroll Image</button>
+              <button
+                onClick={() => setCropMode(true)}
+                style={{ flex: 1, padding: "9px 10px", borderRadius: 7, border: "2px solid " + (cropMode ? PINK : BORDER), background: cropMode ? PINK + "12" : "#fff", color: cropMode ? PINK : "#666", fontFamily: SANS, fontSize: 12, fontWeight: cropMode ? 700 : 500, cursor: "pointer" }}
+              >✂️ Crop Mode</button>
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <span style={{ fontFamily: SANS, fontSize: 11, color: "#888" }}>
-              {cropMode ? "Drag a box around a question to crop it." : "Scroll normally to view the page. Tap “Crop Mode” when ready to select a question."}
+            <span style={{ fontFamily: SANS, fontSize: 11, color: editingCrop ? ORANGE : "#888", fontWeight: editingCrop ? 600 : 400 }}>
+              {editingCrop ? "Editing crop — drag the box to move it, drag the corner handle to resize." : cropMode ? "Drag a box around a question to crop it." : "Scroll normally to view the page. Tap “Crop Mode” when ready to select a question."}
             </span>
-            <button onClick={() => { setImgSrc(null); setCrops([]); setCropMode(false); }} style={{ background: "none", border: "1px solid " + BORDER, borderRadius: 6, padding: "4px 10px", fontFamily: SANS, fontSize: 11, color: "#666", cursor: "pointer", flexShrink: 0, marginLeft: 8 }}>Change image</button>
+            {!editingCrop && <button onClick={() => { setImgSrc(null); setCrops([]); setCropMode(false); }} style={{ background: "none", border: "1px solid " + BORDER, borderRadius: 6, padding: "4px 10px", fontFamily: SANS, fontSize: 11, color: "#666", cursor: "pointer", flexShrink: 0, marginLeft: 8 }}>Change image</button>}
           </div>
           <div
             ref={containerRef}
@@ -460,7 +513,7 @@ export function ScanCropTool({ onInsert, targetSection, onClose }) {
               borderRadius: 6,
               overflow: cropMode ? "hidden" : "auto",
               maxHeight: cropMode ? "none" : "70vh",
-              cursor: cropMode ? "crosshair" : "default",
+              cursor: cropMode && !editingCrop ? "crosshair" : "default",
               touchAction: cropMode ? "none" : "pan-y"
             }}
             onMouseDown={handlePointerDown} onMouseMove={handlePointerMove} onMouseUp={handlePointerUp}
@@ -468,22 +521,48 @@ export function ScanCropTool({ onInsert, targetSection, onClose }) {
             onTouchStart={handlePointerDown} onTouchMove={handlePointerMove} onTouchEnd={handlePointerUp}
           >
             <img ref={imgRef} src={imgSrc} alt="Uploaded paper" style={{ display: "block", maxWidth: "100%", userSelect: "none", pointerEvents: "none" }} draggable={false} />
-            {crops.map(c => <div key={c.id} style={{ position: "absolute", left: c.x, top: c.y, width: c.w, height: c.h, border: "2px solid " + SAGE, background: SAGE + "18", pointerEvents: "none" }} />)}
+            {crops.filter(c => !editingCrop || c.id !== editingCrop.id).map(c => <div key={c.id} style={{ position: "absolute", left: c.x, top: c.y, width: c.w, height: c.h, border: "2px solid " + SAGE, background: SAGE + "18", pointerEvents: "none" }} />)}
             {dragRect && <div style={{ position: "absolute", left: dragRect.x, top: dragRect.y, width: dragRect.w, height: dragRect.h, border: "2px dashed " + PINK, background: PINK + "18", pointerEvents: "none" }} />}
+            {editingCrop && (
+              <div
+                style={{ position: "absolute", inset: 0, zIndex: 5 }}
+                onMouseMove={handleEditMove} onMouseUp={handleEditUp} onMouseLeave={handleEditUp}
+                onTouchMove={handleEditMove} onTouchEnd={handleEditUp}
+              >
+                <div
+                  onMouseDown={e => startBoxDrag(e, "move")}
+                  onTouchStart={e => startBoxDrag(e, "move")}
+                  style={{ position: "absolute", left: editingCrop.x, top: editingCrop.y, width: editingCrop.w, height: editingCrop.h, border: "2px solid " + ORANGE, background: ORANGE + "18", cursor: "move", touchAction: "none" }}
+                >
+                  <div
+                    onMouseDown={e => startBoxDrag(e, "resize")}
+                    onTouchStart={e => startBoxDrag(e, "resize")}
+                    style={{ position: "absolute", right: -9, bottom: -9, width: 18, height: 18, background: ORANGE, border: "2px solid #fff", borderRadius: "50%", cursor: "nwse-resize", touchAction: "none" }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
+          {editingCrop && (
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button onClick={saveEditCrop} style={{ padding: "8px 16px", background: SAGE, color: "#fff", border: "none", borderRadius: 6, fontFamily: SANS, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>✓ Save Crop</button>
+              <button onClick={cancelEditCrop} style={{ padding: "8px 16px", background: "#fff", border: "1px solid " + BORDER, color: "#666", borderRadius: 6, fontFamily: SANS, fontSize: 12, cursor: "pointer" }}>Cancel</button>
+            </div>
+          )}
           {crops.length > 0 && (
             <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
               <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 700, color: "#888", textTransform: "uppercase" }}>{crops.length} cropped question{crops.length !== 1 ? "s" : ""}</div>
               {crops.map((c, i) => (
-                <div key={c.id} style={{ border: "1px solid " + BORDER, borderRadius: 8, padding: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <div key={c.id} style={{ border: "1px solid " + (editingCrop?.id === c.id ? ORANGE : BORDER), borderRadius: 8, padding: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
                   <img src={c.dataUrl} alt={"Crop " + (i+1)} style={{ width: 110, height: "auto", border: "1px solid " + BORDER, borderRadius: 4, flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 180 }}>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                      <div><label style={{ fontFamily: SANS, fontSize: 11, color: "#666", display: "block", marginBottom: 4 }}>Marks</label><input type="number" value={c.marks} onChange={e => setCrops(prev => prev.map(x => x.id === c.id ? { ...x, marks: +e.target.value } : x))} min={1} style={{ padding: "8px 11px", border: "1px solid " + BORDER, borderRadius: 6, fontFamily: SANS, fontSize: 13, width: 60 }} /></div>
+                      <div><label style={{ fontFamily: SANS, fontSize: 11, color: "#666", display: "block", marginBottom: 4 }}>Marks</label><NumberField value={c.marks} onChange={v => setCrops(prev => prev.map(x => x.id === c.id ? { ...x, marks: v } : x))} min={1} style={{ width: 60 }} /></div>
                       <div><label style={{ fontFamily: SANS, fontSize: 11, color: "#666", display: "block", marginBottom: 4 }}>Type</label><select value={c.type} onChange={e => setCrops(prev => prev.map(x => x.id === c.id ? { ...x, type: e.target.value } : x))} style={{ padding: "8px 11px", border: "1px solid " + BORDER, borderRadius: 6, fontFamily: SANS, fontSize: 13, background: "#fff" }}>{Q_TYPES.map(qt => <option key={qt.id} value={qt.id}>{qt.icon} {qt.label}</option>)}</select></div>
                     </div>
-                    <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       <button onClick={() => handleInsertCrop(c)} style={{ padding: "6px 14px", background: SAGE, color: "#fff", border: "none", borderRadius: 6, fontFamily: SANS, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>+ Insert into Paper</button>
+                      <button onClick={() => startEditCrop(c)} style={{ padding: "6px 14px", background: "#fff", border: "1px solid " + ORANGE, color: ORANGE, borderRadius: 6, fontFamily: SANS, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>✎ Edit Crop</button>
                       <button onClick={() => setCrops(prev => prev.filter(x => x.id !== c.id))} style={{ padding: "6px 12px", background: "#fff", border: "1px solid " + RED, color: RED, borderRadius: 6, fontFamily: SANS, fontSize: 12, cursor: "pointer" }}>Discard</button>
                     </div>
                   </div>
@@ -585,7 +664,7 @@ export function QuestionBankModal({ onInsert, onClose, targetSection }) {
               </div>
               <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} placeholder="Type or paste your question here..." style={{ ...iSty, width: "100%", minHeight: 120, fontFamily: SERIF, fontSize: 13, resize: "vertical" }} />
               <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                <input type="number" value={pasteMarks} onChange={e => setPasteMarks(+e.target.value)} min={1} style={{ ...iSty, width: 70 }} placeholder="Marks" />
+                <NumberField value={pasteMarks} onChange={setPasteMarks} min={1} style={{ width: 70 }} />
                 <select value={pasteType} onChange={e => setPasteType(e.target.value)} style={{ ...sSty, flex: 1 }}>
                   {Q_TYPES.map(qt => <option key={qt.id} value={qt.id}>{qt.icon} {qt.label}</option>)}
                 </select>
@@ -611,7 +690,7 @@ export function QuestionBankModal({ onInsert, onClose, targetSection }) {
                       <pre style={{ fontFamily: SERIF, fontSize: 12, whiteSpace: "pre-wrap", margin: "0 0 8px 0" }}>{q.slice(0, 200)}{q.length > 200 ? "…" : ""}</pre>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <label style={{ fontFamily: SANS, fontSize: 11, color: "#666" }}>Marks:</label>
-                        <input type="number" value={uploadMarks[i] || 2} onChange={e => setUploadMarks(m => ({ ...m, [i]: +e.target.value }))} style={{ ...iSty, width: 55 }} min={1} />
+                        <NumberField value={uploadMarks[i] || 2} onChange={v => setUploadMarks(m => ({ ...m, [i]: v }))} min={1} style={{ width: 55 }} />
                         <button onClick={() => { onInsert({ type: "short", marks: uploadMarks[i] || 2, topic: "", difficulty: "Standard", text: q, isOwn: true, ownText: q }, targetSection); onClose(); }} style={{ padding: "5px 12px", background: SAGE, color: "#fff", border: "none", borderRadius: 6, fontFamily: SANS, fontSize: 11, cursor: "pointer" }}>+ Insert</button>
                       </div>
                     </div>
@@ -727,6 +806,37 @@ export function ToggleBtn({ active, onClick, children, activeColor = NAV, style:
   );
 }
 
+/* Fixes the "010" bug: tapping the field now selects the existing value so
+   typing replaces it instead of inserting next to it, and the number is
+   re-parsed cleanly (no stray leading zeros) on blur. */
+export function NumberField({ value, onChange, min = 0, style = {} }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { setText(String(value)); }, [value]);
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      value={text}
+      onFocus={e => e.target.select()}
+      onChange={e => {
+        const raw = e.target.value;
+        setText(raw);
+        if (raw === "") return;
+        const n = parseInt(raw, 10);
+        if (!isNaN(n)) onChange(n);
+      }}
+      onBlur={e => {
+        const n = parseInt(e.target.value, 10);
+        const final = isNaN(n) ? min : Math.max(min, n);
+        setText(String(final));
+        onChange(final);
+      }}
+      min={min}
+      style={{ ...inputStyle, ...style }}
+    />
+  );
+}
+
 export function PaperOutput({ text, meta, imageMap = {} }) {
   function parseSegments(raw) {
     const parts = raw.split(/(GRAPH_PLACEHOLDER:\S+|CROPPED_IMAGE_PLACEHOLDER:\S+)/g);
@@ -792,6 +902,23 @@ export function PaperOutput({ text, meta, imageMap = {} }) {
   );
 }
 
+/* Safety net: even with the no-markdown prompt rule, models sometimes slip in
+   #, **, or bullet dots. Strip those before the paper is shown/printed so it
+   reads like a real Sri Lankan exam paper, not a chat response. */
+export function stripMarkdownArtifacts(text) {
+  if (!text) return text;
+  return text
+    .replace(/^#{1,6}\s+/gm, "")           // # / ## headings
+    .replace(/\*\*(.*?)\*\*/g, "$1")        // **bold**
+    .replace(/__(.*?)__/g, "$1")            // __bold__
+    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1") // *italic*
+    .replace(/(?<!_)_([^_\n]+)_(?!_)/g, "$1")     // _italic_
+    .replace(/^[•\u2022]\s*/gm, "")         // • bullet dots
+    .replace(/^[-*]\s+(?=\S)/gm, "")        // markdown dash/asterisk bullets
+    .replace(/`{1,3}/g, "")                 // backticks / code fences
+    .replace(/\n{3,}/g, "\n\n");            // collapse excess blank lines
+}
+
 export function buildStandardPrompt(state) {
   const { grade, paper, difficulty, selectedTopics, schoolName, teacherName, year, extraInstructions } = state;
   const gradeKey = grade === "ol" ? "ol" : "junior";
@@ -799,7 +926,7 @@ export function buildStandardPrompt(state) {
   const topicsText = selectedTopics.length > 0 ? selectedTopics.join(", ") : "mixed across full syllabus";
   const gradeName = grade === "ol" ? "G.C.E. O/L (Grades 10–11)" : "Junior Secondary";
   const sections = pd.sections.map(s => s.name + ": " + s.marks + " marks, " + s.count + " questions — " + s.note).join("\n");
-  return "You are generating an official Sri Lankan mathematics examination paper.\n\nPAPER IDENTITY:\n- Grade/Level: " + gradeName + "\n- Paper: " + paper + "\n- Duration: " + pd.duration + "\n- Total Marks: " + pd.total + "\n- School: " + (schoolName || "Sri Lanka National School") + "\n- Teacher: " + (teacherName || "") + "\n- Year: " + (year || new Date().getFullYear()) + "\n- Difficulty: " + difficulty + "\n- Topics: " + topicsText + "\n\nEXACT SECTION STRUCTURE:\n" + sections + (grade === "ol" ? "\n\nInclude header: Scaling — (Paper I + Paper II) ÷ 1.8 = 100%" : "") + "\n\nGENERATION RULES:\n1. Number questions Q1, Q2... with sub-parts (a)(b)(c)\n2. Put [x marks] after every part\n3. Use Sri Lankan context: LKR, names like Kamal/Nimal/Sandya/Priya\n4. For any graph output EXACTLY: GRAPH_PLACEHOLDER:[type] on its own line (types: quadratic, linear, distance-time, cumulative, histogram, blank-grid, box-plot). NEVER use ASCII graphs\n5. All marks must sum to " + pd.total + "\n6. Difficulty: " + difficulty + (grade === "ol" && paper === "Paper I" ? "\n7. Section A: 25 questions × 2 marks = 50. Section B: 5 questions × 10 marks = 50. Section B must have multi-part structured questions." : "") + (extraInstructions ? "\n\nSPECIAL INSTRUCTIONS:\n" + extraInstructions : "") + "\n\nEnd with marks summary and END OF PAPER. Begin now.";
+  return "You are generating an official Sri Lankan mathematics examination paper.\n\nPAPER IDENTITY:\n- Grade/Level: " + gradeName + "\n- Paper: " + paper + "\n- Duration: " + pd.duration + "\n- Total Marks: " + pd.total + "\n- School: " + (schoolName || "Sri Lanka National School") + "\n- Teacher: " + (teacherName || "") + "\n- Year: " + (year || new Date().getFullYear()) + "\n- Difficulty: " + difficulty + "\n- Topics: " + topicsText + "\n\nEXACT SECTION STRUCTURE:\n" + sections + (grade === "ol" ? "\n\nInclude header: Scaling — (Paper I + Paper II) ÷ 1.8 = 100%" : "") + "\n\nGENERATION RULES:\n1. Number questions Q1, Q2... with sub-parts (a)(b)(c)\n2. Put [x marks] after every part\n3. Use Sri Lankan context: LKR, names like Kamal/Nimal/Sandya/Priya\n4. For any graph output EXACTLY: GRAPH_PLACEHOLDER:[type] on its own line (types: quadratic, linear, distance-time, cumulative, histogram, blank-grid, box-plot). NEVER use ASCII graphs\n5. All marks must sum to " + pd.total + "\n6. Difficulty: " + difficulty + "\n7. PLAIN TEXT ONLY — this is a printed exam paper, not a chat message. Do NOT use markdown: no # or ## headings, no ** or * for bold/italic, no markdown bullet dashes or • dots, no backticks, no markdown tables. Section headers, question numbers and sub-part letters should be the ONLY structural markers, written exactly as they'd appear on an official Sri Lankan Department of Examinations paper." + (grade === "ol" && paper === "Paper I" ? "\n7. Section A: 25 questions × 2 marks = 50. Section B: 5 questions × 10 marks = 50. Section B must have multi-part structured questions." : "") + (extraInstructions ? "\n\nSPECIAL INSTRUCTIONS:\n" + extraInstructions : "") + "\n\nEnd with marks summary and END OF PAPER. Begin now.";
 }
 
 export function buildCustomPrompt(state) {
@@ -812,7 +939,7 @@ export function buildCustomPrompt(state) {
     }).join("\n");
     return "SECTION " + String.fromCharCode(65+si) + ": " + sec.name + "\nInstructions: \"" + sec.instructions + "\"\n" + qs;
   }).join("\n\n");
-  return "Generate a custom Sri Lankan maths exam paper.\n\nTitle: " + (customTitle||"Mathematics Examination") + "\nSchool: " + (customSchool||"") + "\nTeacher: " + (customTeacher||"") + "\nLevel: " + (customLevel||"G.C.E. O/L") + "\nGrade: " + (customGrade||"10") + "\nDuration: " + (customDuration||"2 hours") + "\nYear: " + (customYear||new Date().getFullYear()) + "\nDate: " + (customDate||"") + (addFormula ? "\nPREPEND a formula sheet.\n" : "") + "\n\n" + qsText + "\n\nRULES:\n1. VERBATIM questions: reproduce exactly\n2. IMAGE questions: output only CROPPED_IMAGE_PLACEHOLDER:[id]\n3. MCQ: exactly 4 options (A)(B)(C)(D)\n4. Graph questions: GRAPH_PLACEHOLDER:[type]\n5. Print section instructions exactly\n6. [x marks] after each question\n7. Sri Lankan context\n8. End with END OF PAPER" + (addAnswerKey ? "\nAppend full MARKING SCHEME after END OF PAPER." : "") + (customExtraInstructions ? "\n\nEXTRA: " + customExtraInstructions : "");
+  return "Generate a custom Sri Lankan maths exam paper.\n\nTitle: " + (customTitle||"Mathematics Examination") + "\nSchool: " + (customSchool||"") + "\nTeacher: " + (customTeacher||"") + "\nLevel: " + (customLevel||"G.C.E. O/L") + "\nGrade: " + (customGrade||"10") + "\nDuration: " + (customDuration||"2 hours") + "\nYear: " + (customYear||new Date().getFullYear()) + "\nDate: " + (customDate||"") + (addFormula ? "\nPREPEND a formula sheet.\n" : "") + "\n\n" + qsText + "\n\nRULES:\n1. VERBATIM questions: reproduce exactly\n2. IMAGE questions: output only CROPPED_IMAGE_PLACEHOLDER:[id]\n3. MCQ: exactly 4 options (A)(B)(C)(D)\n4. Graph questions: GRAPH_PLACEHOLDER:[type]\n5. Print section instructions exactly\n6. [x marks] after each question\n7. Sri Lankan context\n8. PLAIN TEXT ONLY — this is a printed exam paper, not a chat message. Do NOT use markdown: no # or ## headings, no ** or * for bold/italic, no markdown bullet dashes or • dots, no backticks, no markdown tables. Use only question numbers and (a)(b)(c) sub-part letters as structure, exactly as on an official Sri Lankan exam paper.\n9. End with END OF PAPER" + (addAnswerKey ? "\nAppend full MARKING SCHEME after END OF PAPER." : "") + (customExtraInstructions ? "\n\nEXTRA: " + customExtraInstructions : "");
 }
 
 export function makeDefaultSections() {
