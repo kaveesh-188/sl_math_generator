@@ -5,9 +5,9 @@ import {
   PAPER_DATA, OL_TOPICS, JUNIOR_TOPICS, ALL_TOPICS_FLAT,
   Q_TYPES, DIFF_OPTIONS, SECTION_COLORS, GRAPH_TYPES_LIST,
   cardStyle, inputStyle, selectStyle, btnPrimary, labelSty,
-  SectionHeader, ToggleBtn, PaperOutput, SavedPapersPanel,
+  SectionHeader, ToggleBtn, NumberField, PaperOutput, SavedPapersPanel,
   QuestionBankModal, GraphModal, buildStandardPrompt, buildCustomPrompt,
-  makeDefaultSections
+  makeDefaultSections, stripMarkdownArtifacts
 } from "./AppParts";
 
 function SectionPanel({ sec, si, secColor, onToggleCollapse, onRemove, canRemove, onUpdateName, onUpdateInstructions, onAddQuestion, onOpenBank, onShowGraphModal, onUpdateQ, onRemoveQ, onDuplicateQ }) {
@@ -66,8 +66,8 @@ function QuestionRow({ q, qi, onUpdate, onRemove, onDuplicate, onShowGraphModal 
         <div style={{ padding: "12px 14px", borderTop: "1px solid " + BORDER }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
             <div style={{ fontFamily: SANS, fontSize: 12, color: "#666", alignSelf: "center" }}>Written by:</div>
-            <ToggleBtn active={!q.isOwn} onClick={() => onUpdate("isOwn", false)} activeColor={BLUE} style={{ fontSize: 12, padding: "5px 12px" }}>🤖 AI</ToggleBtn>
-            <ToggleBtn active={q.isOwn} onClick={() => onUpdate("isOwn", true)} activeColor={SAGE} style={{ fontSize: 12, padding: "5px 12px" }}>✍ Me</ToggleBtn>
+            <ToggleBtn active={!q.isOwn} onClick={() => onUpdate("isOwn", false)} activeColor={BLUE} style={{ fontSize: 12, padding: "5px 12px", textAlign: "center", lineHeight: 1.3 }}>🤖 AI<br /><span style={{ fontSize: 10, fontWeight: 400, opacity: 0.8 }}>(describe it below)</span></ToggleBtn>
+            <ToggleBtn active={q.isOwn} onClick={() => onUpdate("isOwn", true)} activeColor={SAGE} style={{ fontSize: 12, padding: "5px 12px", textAlign: "center", lineHeight: 1.3 }}>✍ Me<br /><span style={{ fontSize: 10, fontWeight: 400, opacity: 0.8 }}>(type exact question)</span></ToggleBtn>
           </div>
           {q.isOwn ? (
             <>
@@ -81,7 +81,7 @@ function QuestionRow({ q, qi, onUpdate, onRemove, onDuplicate, onShowGraphModal 
                 <textarea value={q.ownText || ""} onChange={e => onUpdate("ownText", e.target.value)} placeholder="Type or paste the exact question text here..." style={{ ...inputStyle, width: "100%", minHeight: 100, fontFamily: SERIF, fontSize: 13, resize: "vertical" }} />
               )}
               <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                <div><label style={labelSty}>Marks</label><input type="number" value={q.marks} onChange={e => onUpdate("marks", +e.target.value)} min={1} style={{ ...inputStyle, width: 65 }} /></div>
+                <div><label style={labelSty}>Marks</label><NumberField value={q.marks} onChange={v => onUpdate("marks", v)} min={1} style={{ width: 65 }} /></div>
                 <div style={{ flex: 1 }}><label style={labelSty}>Type</label><select value={q.type} onChange={e => onUpdate("type", e.target.value)} style={{ ...selectStyle, width: "100%" }}>{Q_TYPES.map(t => <option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}</select></div>
                 <div style={{ flex: 1 }}><label style={labelSty}>Topic</label><select value={q.topic} onChange={e => onUpdate("topic", e.target.value)} style={{ ...selectStyle, width: "100%" }}><option value="">— select —</option>{ALL_TOPICS_FLAT.map(t => <option key={t}>{t}</option>)}</select></div>
               </div>
@@ -89,10 +89,10 @@ function QuestionRow({ q, qi, onUpdate, onRemove, onDuplicate, onShowGraphModal 
           ) : (
             <>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <div><label style={labelSty}>Marks</label><input type="number" value={q.marks} onChange={e => onUpdate("marks", +e.target.value)} min={1} style={{ ...inputStyle, width: 65 }} /></div>
+                <div><label style={labelSty}>Marks</label><NumberField value={q.marks} onChange={v => onUpdate("marks", v)} min={1} style={{ width: 65 }} /></div>
                 <div style={{ flex: 1 }}><label style={labelSty}>Question Type</label><select value={q.type} onChange={e => onUpdate("type", e.target.value)} style={{ ...selectStyle, width: "100%" }}>{Q_TYPES.map(t => <option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}</select></div>
                 <div><label style={labelSty}>Difficulty</label><select value={q.difficulty} onChange={e => onUpdate("difficulty", e.target.value)} style={selectStyle}>{DIFF_OPTIONS.map(d => <option key={d.id}>{d.id}</option>)}</select></div>
-                {qt?.defaultSubs > 0 && <div><label style={labelSty}>Sub-parts</label><input type="number" value={q.subParts || qt.defaultSubs} onChange={e => onUpdate("subParts", +e.target.value)} min={0} style={{ ...inputStyle, width: 65 }} /></div>}
+                {qt?.defaultSubs > 0 && <div><label style={labelSty}>Sub-parts</label><NumberField value={q.subParts || qt.defaultSubs} onChange={v => onUpdate("subParts", v)} min={0} style={{ width: 65 }} /></div>}
               </div>
               <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
                 <div style={{ flex: 1 }}><label style={labelSty}>Topic</label><select value={q.topic} onChange={e => onUpdate("topic", e.target.value)} style={{ ...selectStyle, width: "100%" }}><option value="">— select —</option>{ALL_TOPICS_FLAT.map(t => <option key={t}>{t}</option>)}</select></div>
@@ -155,16 +155,17 @@ export default function App() {
       const prompt = mode === "standard"
         ? buildStandardPrompt({ grade, paper, difficulty, selectedTopics, schoolName, teacherName, year, extraInstructions })
         : buildCustomPrompt({ customTitle, customSchool, customTeacher, customLevel, customGrade, customDuration, customYear, customDate, addAnswerKey, addFormula, sections, customExtraInstructions });
-  const res = await fetch("/api/generate", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4000, messages: [{ role: "user", content: prompt }] })
-});
+
+      // Calls our own /api/generate serverless proxy — the Anthropic key
+      // stays server-side and is never bundled into the browser JS.
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt })
+      });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || "API error");
-      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+      if (!res.ok) throw new Error(data.error || "API error");
+      const text = stripMarkdownArtifacts(data.text || "");
       const meta = mode === "standard"
         ? { title: "Mathematics " + paper + " — " + (grade === "ol" ? "G.C.E. O/L" : "Junior Secondary"), sub: (schoolName || "National School") + " | " + paper + " | " + year }
         : { title: customTitle || "Mathematics Examination", sub: (customSchool || "") + " | Grade " + customGrade + " | " + customYear };
@@ -336,11 +337,14 @@ export default function App() {
               </>
             ) : (
               <>
-                <div style={{ background: "#EFF6FF", border: "1px solid " + BLUE + "44", borderRadius: 10, padding: "14px 18px", marginBottom: 18, display: "flex", gap: 10 }}>
-                  <span>ℹ</span>
-                  <div style={{ fontFamily: SANS, fontSize: 12.5, color: "#1D4ED8", lineHeight: 1.6 }}>
-                    <strong>Custom Mode:</strong> Fill in paper identity → build sections → add questions (AI writes or paste your own) → Generate.
-                  </div>
+                <div style={{ background: "#EFF6FF", border: "1px solid " + BLUE + "44", borderRadius: 10, padding: "16px 18px", marginBottom: 18 }}>
+                  <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: "#1D4ED8", marginBottom: 8 }}>ℹ How Custom Builder works</div>
+                  <ol style={{ margin: 0, paddingLeft: 18, fontFamily: SANS, fontSize: 12.5, color: "#1D4ED8", lineHeight: 1.9 }}>
+                    <li><strong>Paper Identity</strong> — school, level, grade, duration.</li>
+                    <li><strong>Sections & Questions</strong> — tap a coloured "+ button" (e.g. + Short Answer) to add a question, then tap it to open it. Set its marks, difficulty and topic.</li>
+                    <li>For each question choose <strong>🤖 AI</strong> (you describe the topic, the AI writes the full question) or <strong>✍ Me</strong> (you type the exact question yourself — printed exactly as typed).</li>
+                    <li>Tap <strong>Generate Custom Paper</strong> at the bottom when done.</li>
+                  </ol>
                 </div>
 
                 <div style={cardStyle}>
